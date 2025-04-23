@@ -1,7 +1,7 @@
 # Use a base image that includes ffmpeg
 FROM node:18-slim
 
-# Install ffmpeg, tcpdum, ngrep
+# Install ffmpeg, tcpdump, ngrep
 RUN apt-get update && \
     apt-get install -y ffmpeg tcpdump ngrep && \
     apt-get clean

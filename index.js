@@ -89,7 +89,7 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
     processAudioConversion(id, audioFile.path, res);
 });
 
-//MP3conversion logic moved to a function -> reusable
+//MP3 conversion logic moved to a function -> reusable
 function processAudioConversion(id, inputPath, res, customFileName = null) {
     const fileName = customFileName ? 
         `${customFileName.substring(0, 50)}_320kbps.mp3` : 

@@ -22,7 +22,7 @@ app.use((req, res, next) => {
 
 // search endpoint to YouTube -> now returns videoId to client
 app.post('/search', async (req, res) => {
-    const query = req.body.query;
+    const query = req.body;
     const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${api}&maxResults=10`;
     try {
         console.log("Sending request to YouTube API");
@@ -86,27 +86,22 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
 
     console.log('Received audio file:', audioFile);
 
-    processAudioConversion(id, audioFile.path, res);
-});
-
-//MP3 conversion logic moved to a function -> reusable
-function processAudioConversion(id, inputPath, res, customFileName = null) {
-    const fileName = customFileName ? 
-        `${customFileName.substring(0, 50)}_320kbps.mp3` : 
-        `${Date.now()}_320kbps.mp3`;
-    
-    const outputPath = `uploads/${fileName}`;
+    const inputPath = req.file.path;
+    const outputPath = `uploads/${Date.now()}_320kbps.mp3`;
 
     ffmpeg(inputPath)
-        .audioBitrate(320) // Converts to 320kbps
+        .audioBitrate(320) //converts to 320kbps
         .on('start', (commandLine) => {
             console.log('[FFMPEG START]', commandLine);
         })
         .on('progress', (progress) => {
-            updateProgress(id, {
-                status: 'converting',
-                percent: progress.percent?.toFixed(2)
-            });
+            const client = progressClients.get(id);
+            if (client) {
+                const message = JSON.stringify({
+                    percent: progress.percent?.toFixed(2),
+                });
+                client.write(`data: ${message}\n\n`);
+            }
         })
         .on('stderr', (stderrLine) => {
             console.log('[FFMPEG STDERR]', stderrLine);
@@ -115,32 +110,39 @@ function processAudioConversion(id, inputPath, res, customFileName = null) {
             console.log('[FFMPEG END] Conversion finished.');
 
             // Close SSE stream and notify client
-            updateProgress(id, { done: true, fileName });
-            
-            res.download(outputPath, fileName, (err) => {
+            const client = progressClients.get(id);
+            if (client) {
+                client.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+                client.end();
+                progressClients.delete(id);
+            }
+
+            res.download(outputPath, (err) => {
                 if (err) {
                     console.error('Error during file download:', err);
                     res.status(500).send('Error during file download');
                 }
 
-                // Clean up files
                 fs.unlinkSync(inputPath);
                 fs.unlinkSync(outputPath);
             });
         })
         .on('error', (err) => {
             console.error('[FFMPEG ERROR]', err.message);
-            
-            updateProgress(id, { error: 'Conversion failed' });
             res.status(500).send('Error during conversion');
 
-            // Clean up files
+            const client = progressClients.get(id);
+            if (client) {
+                client.write(`data: ${JSON.stringify({ error: true })}\n\n`);
+                client.end();
+                progressClients.delete(id);
+            }
+
             fs.existsSync(inputPath) && fs.unlinkSync(inputPath);
             fs.existsSync(outputPath) && fs.unlinkSync(outputPath);
         })
         .save(outputPath);
-}
-
+});
 
 // starts server
 app.listen(3000, () => {

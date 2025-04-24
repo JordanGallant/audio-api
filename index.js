@@ -22,7 +22,7 @@ app.use((req, res, next) => {
 
 // search endpoint to YouTube -> now returns videoId to client
 app.post('/search', async (req, res) => {
-    const query = req.body;
+    const query = req.body.query;
     const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${api}&maxResults=10`;
     try {
         console.log("Sending request to YouTube API");

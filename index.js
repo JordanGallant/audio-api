@@ -23,21 +23,23 @@ app.use((req, res, next) => {
 // search endpoint to YouTube -> now returns videoId to client
 app.post('/search', async (req, res) => {
     const query = req.body;
+    console.log(query)
     const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${api}&maxResults=10`;
     try {
         console.log("Sending request to YouTube API");
         const response = await axios.get(url);
+        console.log(url);
         
-        // find the first video that doesn't have "official" in the title
+        // checks video is not a music video -> unwanted/dead audio
         let videoId, title;
         for (const item of response.data.items) {
             if (item.id.videoId && item.snippet.title) {
                 const currentTitle = item.snippet.title;
                 if (!currentTitle.toLowerCase().includes('official') && !currentTitle.toLowerCase().includes('show') && !currentTitle.toLowerCase().includes('stage') ) {
                     videoId = item.id.videoId;
-                    console.log(videoId)
+                    console.log("vidoe",videoId)
                     title = currentTitle;
-                    console.log(title)
+                    console.log("title",title)
                     break;
                 }
             }

@@ -115,7 +115,7 @@ app.post('/download', async (req, res) => {
         noWarnings: true,
         preferFreeFormats: true,
         youtubeSkipDashManifest: true,
-        cookies: cookiesPath,
+        cookies: cookiesPath, // spoofed real auth cookies that expire 1st jan 2030 (LOL -> cookies.txt)
         geoBypass: true,
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         addHeader: [

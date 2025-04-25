@@ -81,11 +81,6 @@ if (!fs.existsSync(downloadDir)) {
 }
 
 //receives video id -> download the audio from youtube 
-// Updated /download endpoint with proper YouTube authentication
-const ffmpeg = require('fluent-ffmpeg');
-const path = require('path');
-const fs = require('fs');
-
 app.post('/download', async (req, res) => {
     const { id } = req.body;
     const url = `https://www.youtube.com/watch?v=${id}`;
@@ -179,7 +174,7 @@ app.post('/download', async (req, res) => {
         }
       });
       
-      // Provide more specific error messages to client
+      // error handling -> youtube HATES bots but bad at stopping them
       if (error.stderr && error.stderr.includes('confirm you\'re not a bot')) {
         res.status(429).json({ 
           error: 'YouTube has detected automated access. Please try again later.',

@@ -87,7 +87,7 @@ app.post('/download', async (req, res) => {
     const outputPath = path.join(__dirname, 'downloads', `${id}.mp3`);
     
     try {
-      // Download audio from YouTube video with cookies
+      // Download audio from YouTube video with different options
       await youtubedl(url, {
         extractAudio: true,
         audioFormat: 'mp3',
@@ -96,12 +96,13 @@ app.post('/download', async (req, res) => {
         noWarnings: true,
         preferFreeFormats: true,
         youtubeSkipDashManifest: true,
-        // try to bypass bot recognition from youtube:
-        cookiesFromBrowser: 'chrome', // Or 'firefox', 'edge', 'safari', etc.
-        addHeader: ['User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36']
+        // Add these options to bypass bot detection:
+        addHeader: ['User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'],
+        geoBypass: true,
+        noPlaylist: true,
+        socketTimeout: 30, // Increase timeout
       });
   
-      // Set headers for streaming the file
       res.setHeader('Content-Disposition', `attachment; filename="${id}.mp3"`);
       res.setHeader('Content-Type', 'audio/mpeg');
   

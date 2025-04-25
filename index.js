@@ -81,13 +81,32 @@ if (!fs.existsSync(downloadDir)) {
 }
 
 //receives video id -> download the audio from youtube 
+// Updated /download endpoint with proper YouTube authentication
 app.post('/download', async (req, res) => {
     const { id } = req.body;
     const url = `https://www.youtube.com/watch?v=${id}`;
     const outputPath = path.join(__dirname, 'downloads', `${id}.mp3`);
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
     
     try {
-      // Download audio from YouTube video with different options
+      // Check if cookies file exists
+      if (!fs.existsSync(cookiesPath)) {
+        console.log('Creating cookies file from browser...');
+        try {
+          // First create a cookies file from browser if it doesn't exist
+          await youtubedl('https://www.youtube.com/', {
+            dumpSingleJson: true,
+            skipDownload: true,
+            cookiesFromBrowser: 'chrome',
+            cookies: cookiesPath
+          });
+        } catch (cookieError) {
+          console.log('Cookie extraction warning:', cookieError.message);
+          // Continue anyway as we might have partial cookies
+        }
+      }
+      
+      // Download audio from YouTube with multiple authentication methods
       await youtubedl(url, {
         extractAudio: true,
         audioFormat: 'mp3',
@@ -96,13 +115,20 @@ app.post('/download', async (req, res) => {
         noWarnings: true,
         preferFreeFormats: true,
         youtubeSkipDashManifest: true,
-        // Add these options to bypass bot detection:
-        addHeader: ['User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'],
+        cookies: cookiesPath,
         geoBypass: true,
-        noPlaylist: true,
-        socketTimeout: 30, // Increase timeout
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        addHeader: [
+          'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language:en-US,en;q=0.5',
+          'DNT:1',
+          'Connection:keep-alive'
+        ],
+        retries: 3,
+        socketTimeout: 30
       });
   
+      // Set headers for streaming the file
       res.setHeader('Content-Disposition', `attachment; filename="${id}.mp3"`);
       res.setHeader('Content-Type', 'audio/mpeg');
   
@@ -118,7 +144,19 @@ app.post('/download', async (req, res) => {
       });
     } catch (error) {
       console.error('Download error:', error);
-      res.status(500).json({ error: 'Failed to download audio' });
+      
+      // Provide more specific error messages to client
+      if (error.stderr && error.stderr.includes('confirm you\'re not a bot')) {
+        res.status(429).json({ 
+          error: 'YouTube has detected automated access. Please try again later.',
+          details: 'The service is temporarily being rate-limited by YouTube.' 
+        });
+      } else {
+        res.status(500).json({ 
+          error: 'Failed to download audio',
+          details: error.message 
+        });
+      }
     }
   });
   

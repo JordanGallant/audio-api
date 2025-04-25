@@ -34,7 +34,7 @@ app.post('/search', async (req, res) => {
         for (const item of response.data.items) {
             if (item.id.videoId && item.snippet.title) {
                 const currentTitle = item.snippet.title;
-                if (!currentTitle.toLowerCase().includes('official') && !currentTitle.toLowerCase().includes('show') && !currentTitle.toLowerCase().includes('stage')) {
+                if (!currentTitle.toLowerCase().includes('official') && !currentTitle.toLowerCase().includes('show') && !currentTitle.toLowerCase().includes('stage')&& !currentTitle.toLowerCase().includes('remix')) {
                     videoId = item.id.videoId;
                     console.log("vidoe", videoId)
                     break;
@@ -82,10 +82,15 @@ if (!fs.existsSync(downloadDir)) {
 
 //receives video id -> download the audio from youtube 
 // Updated /download endpoint with proper YouTube authentication
+const ffmpeg = require('fluent-ffmpeg');
+const path = require('path');
+const fs = require('fs');
+
 app.post('/download', async (req, res) => {
     const { id } = req.body;
     const url = `https://www.youtube.com/watch?v=${id}`;
     const outputPath = path.join(__dirname, 'downloads', `${id}.mp3`);
+    const convertedPath = path.join(__dirname, 'downloads', `${id}_320kbps.mp3`);
     const cookiesPath = path.join(__dirname, 'cookies.txt');
     
     try {
@@ -127,23 +132,52 @@ app.post('/download', async (req, res) => {
         retries: 3,
         socketTimeout: 30
       });
+
+      // Convert bitrate to 320kbps using fluent-ffmpeg
+      await new Promise((resolve, reject) => {
+        ffmpeg(outputPath)
+          .audioBitrate(320)
+          .format('mp3')
+          .on('error', (err) => {
+            console.error('FFmpeg error:', err);
+            reject(err);
+          })
+          .on('end', () => {
+            console.log('Bitrate conversion completed');
+            resolve();
+          })
+          .save(convertedPath);
+      });
   
       // Set headers for streaming the file
-      res.setHeader('Content-Disposition', `attachment; filename="${id}.mp3"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${id}_320kbps.mp3"`);
       res.setHeader('Content-Type', 'audio/mpeg');
   
       // Create a read stream and pipe it to the response
-      const fileStream = fs.createReadStream(outputPath);
+      const fileStream = fs.createReadStream(convertedPath);
       fileStream.pipe(res);
   
-      // Delete the file after sending it
+      // Delete the files after sending
       fileStream.on('end', () => {
+        // Delete both original and converted files
         fs.unlink(outputPath, (err) => {
-          if (err) console.error('Error deleting file:', err);
+          if (err) console.error('Error deleting original file:', err);
+        });
+        fs.unlink(convertedPath, (err) => {
+          if (err) console.error('Error deleting converted file:', err);
         });
       });
     } catch (error) {
       console.error('Download error:', error);
+      
+      // Clean up any files that might have been created before the error
+      [outputPath, convertedPath].forEach(filePath => {
+        if (fs.existsSync(filePath)) {
+          fs.unlink(filePath, err => {
+            if (err) console.error(`Error cleaning up ${filePath}:`, err);
+          });
+        }
+      });
       
       // Provide more specific error messages to client
       if (error.stderr && error.stderr.includes('confirm you\'re not a bot')) {
@@ -153,12 +187,12 @@ app.post('/download', async (req, res) => {
         });
       } else {
         res.status(500).json({ 
-          error: 'Failed to download audio',
+          error: 'Failed to download or convert audio',
           details: error.message 
         });
       }
     }
-  });
+});
   
 // audio conversion endpoint - recieves audio data
 app.post('/convert-audio', upload.single('audio'), (req, res) => {

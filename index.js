@@ -83,17 +83,18 @@ if (!fs.existsSync(downloadDir)) {
 //receives video id -> download the audio from youtube 
 app.post('/download', async (req, res) => {
     const { id: videoId } = req.body;
-    const id = req.query.id; // Get the tracking ID from the query parameter
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
-    const outputPath = path.join(__dirname, 'downloads', `${videoId}.mp3`);
+    const id = req.query.id; // Get the tracking ID from the query parameter 
+    const url = `https://www.youtube.com/watch?v=${videoId}`; //sets youtube url
+    const outputPath = path.join(__dirname, 'downloads', `${videoId}.mp3`); //temp folder for downloading from youtube
     const convertedPath = path.join(__dirname, 'downloads', `${videoId}_320kbps.mp3`);
-    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    const cookiesPath = path.join(__dirname, 'cookies.txt'); //finds spoofed auth cookies
     
     try {
-      // Check if cookies file exists
+      // check if cookies file exists
       if (!fs.existsSync(cookiesPath)) {
         console.log('Creating cookies file from browser...');
         try {
+            //loads cookies to bypass auth
           await youtubedl('https://www.youtube.com/', {
             dumpSingleJson: true,
             skipDownload: true,
@@ -111,7 +112,7 @@ app.post('/download', async (req, res) => {
           client.write(`data: ${JSON.stringify({ percent: "0.00" })}\n\n`);
       }
       
-      // Download audio from YouTube
+      // download audio from YouTube
       await youtubedl(url, {
         extractAudio: true,
         audioFormat: 'mp3',
@@ -132,22 +133,25 @@ app.post('/download', async (req, res) => {
         retries: 3,
         socketTimeout: 30
       });
+      //server log when download is done
+      console.log(`[YOUTUBE-DL END] Successfully downloaded video ${videoId} to ${outputPath}`);
 
-      // Send progress update after download
+
+      // send progress update after download
       if (client) {
-          client.write(`data: ${JSON.stringify({ percent: "50.00" })}\n\n`);
+          client.write(`data: ${JSON.stringify({ percent: "50.00" })}\n\n`); //50 when done
       }
 
-      // Convert bitrate to 320kbps using fluent-ffmpeg
+      // convert bitrate to 320kbps using fluent-ffmpeg
       await new Promise((resolve, reject) => {
         ffmpeg(outputPath)
           .audioBitrate(320)
           .format('mp3')
           .on('progress', (progress) => {
-              // Calculate total progress (50% for download + 50% for conversion)
+              // calculate total progress (50% for download + 50% for conversion)
               const totalProgress = 50 + (progress.percent || 0) * 0.5;
               
-              // Send progress update
+              // send progress update
               const client = progressClients.get(id);
               if (client) {
                   client.write(`data: ${JSON.stringify({
@@ -159,6 +163,7 @@ app.post('/download', async (req, res) => {
             console.error('FFmpeg error:', err);
             reject(err);
           })
+          //server logging when coversion done
           .on('end', () => {
             console.log('Bitrate conversion completed');
             

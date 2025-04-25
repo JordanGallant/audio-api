@@ -269,7 +269,7 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
         .on('end', () => {
             console.log('[FFMPEG END] Conversion finished.');
 
-            // Close SSE stream and notify client
+            // close SSE stream and notify client
             const client = progressClients.get(id);
             if (client) {
                 client.write(`data: ${JSON.stringify({ done: true })}\n\n`);

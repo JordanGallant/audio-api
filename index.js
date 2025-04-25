@@ -82,10 +82,11 @@ if (!fs.existsSync(downloadDir)) {
 
 //receives video id -> download the audio from youtube 
 app.post('/download', async (req, res) => {
-    const { id } = req.body;
-    const url = `https://www.youtube.com/watch?v=${id}`;
-    const outputPath = path.join(__dirname, 'downloads', `${id}.mp3`);
-    const convertedPath = path.join(__dirname, 'downloads', `${id}_320kbps.mp3`);
+    const { id: videoId } = req.body;
+    const id = req.query.id; // Get the tracking ID from the query parameter
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    const outputPath = path.join(__dirname, 'downloads', `${videoId}.mp3`);
+    const convertedPath = path.join(__dirname, 'downloads', `${videoId}_320kbps.mp3`);
     const cookiesPath = path.join(__dirname, 'cookies.txt');
     
     try {
@@ -93,7 +94,6 @@ app.post('/download', async (req, res) => {
       if (!fs.existsSync(cookiesPath)) {
         console.log('Creating cookies file from browser...');
         try {
-          // First create a cookies file from browser if it doesn't exist
           await youtubedl('https://www.youtube.com/', {
             dumpSingleJson: true,
             skipDownload: true,
@@ -102,11 +102,16 @@ app.post('/download', async (req, res) => {
           });
         } catch (cookieError) {
           console.log('Cookie extraction warning:', cookieError.message);
-          // Continue anyway as we might have partial cookies
         }
       }
       
-      // Download audio from YouTube with multiple authentication methods
+      // Send initial progress update
+      const client = progressClients.get(id);
+      if (client) {
+          client.write(`data: ${JSON.stringify({ percent: "0.00" })}\n\n`);
+      }
+      
+      // Download audio from YouTube
       await youtubedl(url, {
         extractAudio: true,
         audioFormat: 'mp3',
@@ -115,7 +120,7 @@ app.post('/download', async (req, res) => {
         noWarnings: true,
         preferFreeFormats: true,
         youtubeSkipDashManifest: true,
-        cookies: cookiesPath, // spoofed real auth cookies that expire 1st jan 2030 (LOL -> cookies.txt)
+        cookies: cookiesPath,
         geoBypass: true,
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         addHeader: [
@@ -128,24 +133,48 @@ app.post('/download', async (req, res) => {
         socketTimeout: 30
       });
 
+      // Send progress update after download
+      if (client) {
+          client.write(`data: ${JSON.stringify({ percent: "50.00" })}\n\n`);
+      }
+
       // Convert bitrate to 320kbps using fluent-ffmpeg
       await new Promise((resolve, reject) => {
         ffmpeg(outputPath)
           .audioBitrate(320)
           .format('mp3')
+          .on('progress', (progress) => {
+              // Calculate total progress (50% for download + 50% for conversion)
+              const totalProgress = 50 + (progress.percent || 0) * 0.5;
+              
+              // Send progress update
+              const client = progressClients.get(id);
+              if (client) {
+                  client.write(`data: ${JSON.stringify({
+                      percent: totalProgress.toFixed(2)
+                  })}\n\n`);
+              }
+          })
           .on('error', (err) => {
             console.error('FFmpeg error:', err);
             reject(err);
           })
           .on('end', () => {
             console.log('Bitrate conversion completed');
+            
+            // Send final progress update
+            const client = progressClients.get(id);
+            if (client) {
+                client.write(`data: ${JSON.stringify({ percent: "100.00", done: true })}\n\n`);
+            }
+            
             resolve();
           })
           .save(convertedPath);
       });
   
       // Set headers for streaming the file
-      res.setHeader('Content-Disposition', `attachment; filename="${id}_320kbps.mp3"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${videoId}_320kbps.mp3"`);
       res.setHeader('Content-Type', 'audio/mpeg');
   
       // Create a read stream and pipe it to the response
@@ -161,11 +190,18 @@ app.post('/download', async (req, res) => {
         fs.unlink(convertedPath, (err) => {
           if (err) console.error('Error deleting converted file:', err);
         });
+        
+        // Close the progress stream
+        const client = progressClients.get(id);
+        if (client) {
+          client.end();
+          progressClients.delete(id);
+        }
       });
     } catch (error) {
       console.error('Download error:', error);
       
-      // Clean up any files that might have been created before the error
+      // Clean up any files that might have been created
       [outputPath, convertedPath].forEach(filePath => {
         if (fs.existsSync(filePath)) {
           fs.unlink(filePath, err => {
@@ -174,7 +210,14 @@ app.post('/download', async (req, res) => {
         }
       });
       
-      // error handling -> youtube HATES bots but bad at stopping them
+      // Send error to progress client
+      const client = progressClients.get(id);
+      if (client) {
+        client.write(`data: ${JSON.stringify({ error: true, message: error.message })}\n\n`);
+        client.end();
+        progressClients.delete(id);
+      }
+      
       if (error.stderr && error.stderr.includes('confirm you\'re not a bot')) {
         res.status(429).json({ 
           error: 'YouTube has detected automated access. Please try again later.',

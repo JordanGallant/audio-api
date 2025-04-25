@@ -83,15 +83,11 @@ if (!fs.existsSync(downloadDir)) {
 //receives video id -> download the audio from youtube 
 app.post('/download', async (req, res) => {
     const { id } = req.body;
-    if (!id) {
-      return res.status(400).json({ error: 'Video ID is required' });
-    }
-  
     const url = `https://www.youtube.com/watch?v=${id}`;
-    const outputPath = path.join(downloadDir, `${id}.mp3`);
-  
+    const outputPath = path.join(__dirname, 'downloads', `${id}.mp3`);
+    
     try {
-      // Download audio from YouTube video
+      // Download audio from YouTube video with cookies
       await youtubedl(url, {
         extractAudio: true,
         audioFormat: 'mp3',
@@ -100,6 +96,9 @@ app.post('/download', async (req, res) => {
         noWarnings: true,
         preferFreeFormats: true,
         youtubeSkipDashManifest: true,
+        // try to bypass bot recognition from youtube:
+        cookiesFromBrowser: 'chrome', // Or 'firefox', 'edge', 'safari', etc.
+        addHeader: ['User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36']
       });
   
       // Set headers for streaming the file

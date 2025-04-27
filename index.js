@@ -131,7 +131,8 @@ app.post('/download', async (req, res) => {
           'Connection:keep-alive'
         ],
         retries: 3,
-        socketTimeout: 30
+        socketTimeout: 30,
+        forceOverwrite: true
       });
       //server log when download is done
       console.log(`[YOUTUBE-DL END] Successfully downloaded video ${videoId} to ${outputPath}`);

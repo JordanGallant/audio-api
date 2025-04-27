@@ -112,75 +112,30 @@ app.post('/download', async (req, res) => {
           client.write(`data: ${JSON.stringify({ percent: "0.00" })}\n\n`);
       }
       
-      // Download audio from YouTube with progress tracking
-      await new Promise((resolve, reject) => {
-        const ytdlOptions = {
-          extractAudio: true,
-          audioFormat: 'mp3',
-          output: outputPath,
-          noCheckCertificates: true,
-          noWarnings: true,
-          preferFreeFormats: true,
-          youtubeSkipDashManifest: true,
-          cookies: cookiesPath,
-          geoBypass: true,
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          addHeader: [
-            'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language:en-US,en;q=0.5',
-            'DNT:1',
-            'Connection:keep-alive'
-          ],
-          retries: 3,
-          socketTimeout: 30,
-          progressTemplate: 'download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s'
-        };
-
-        const process = youtubedl.exec(url, ytdlOptions);
-        
-        let lastPercent = 0;
-        process.stdout.on('data', (data) => {
-          const output = data.toString();
-          const match = output.match(/download:(\d+)\/(\d+)/);
-          
-          if (match) {
-            const downloaded = parseInt(match[1]);
-            const total = parseInt(match[2]);
-            
-            if (total > 0) {
-              // Calculate percentage and scale to 0-50% range
-              const downloadPercent = Math.min(50 * (downloaded / total), 50).toFixed(2);
-              
-              // Only send updates if percent changed significantly (avoid flooding)
-              if (Math.abs(parseFloat(downloadPercent) - lastPercent) > 1) {
-                lastPercent = parseFloat(downloadPercent);
-                const client = progressClients.get(id);
-                if (client) {
-                  client.write(`data: ${JSON.stringify({ percent: downloadPercent })}\n\n`);
-                }
-              }
-            }
-          }
-        });
-
-        process.stderr.on('data', (data) => {
-          console.error(`stderr: ${data}`);
-        });
-
-        process.on('error', (error) => {
-          console.error('Youtube-dl process error:', error);
-          reject(error);
-        });
-
-        process.on('close', (code) => {
-          if (code === 0) {
-            console.log(`[YOUTUBE-DL END] Successfully downloaded video ${videoId} to ${outputPath}`);
-            resolve();
-          } else {
-            reject(new Error(`Youtube-dl process exited with code ${code}`));
-          }
-        });
+      // download audio from YouTube
+      await youtubedl(url, {
+        extractAudio: true,
+        audioFormat: 'mp3',
+        output: outputPath,
+        noCheckCertificates: true,
+        noWarnings: true,
+        preferFreeFormats: true,
+        youtubeSkipDashManifest: true,
+        cookies: cookiesPath,
+        geoBypass: true,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        addHeader: [
+          'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language:en-US,en;q=0.5',
+          'DNT:1',
+          'Connection:keep-alive'
+        ],
+        retries: 3,
+        socketTimeout: 30
       });
+      //server log when download is done
+      console.log(`[YOUTUBE-DL END] Successfully downloaded video ${videoId} to ${outputPath}`);
+
 
       // send progress update after download
       if (client) {
@@ -222,28 +177,63 @@ app.post('/download', async (req, res) => {
           })
           .save(convertedPath);
       });
-
-      // Send download link
-      res.json({
-        success: true,
-        message: 'Download completed successfully',
-        file: `/download-file/${videoId}_320kbps.mp3`
+  
+      // Set headers for streaming the file
+      res.setHeader('Content-Disposition', `attachment; filename="${videoId}_320kbps.mp3"`);
+      res.setHeader('Content-Type', 'audio/mpeg');
+  
+      // Create a read stream and pipe it to the response
+      const fileStream = fs.createReadStream(convertedPath);
+      fileStream.pipe(res);
+  
+      // Delete the files after sending
+      fileStream.on('end', () => {
+        // Delete both original and converted files
+        fs.unlink(outputPath, (err) => {
+          if (err) console.error('Error deleting original file:', err);
+        });
+        fs.unlink(convertedPath, (err) => {
+          if (err) console.error('Error deleting converted file:', err);
+        });
+        
+        // Close the progress stream
+        const client = progressClients.get(id);
+        if (client) {
+          client.end();
+          progressClients.delete(id);
+        }
       });
-
     } catch (error) {
       console.error('Download error:', error);
       
-      // Notify client of error
+      // Clean up any files that might have been created
+      [outputPath, convertedPath].forEach(filePath => {
+        if (fs.existsSync(filePath)) {
+          fs.unlink(filePath, err => {
+            if (err) console.error(`Error cleaning up ${filePath}:`, err);
+          });
+        }
+      });
+      
+      // Send error to progress client
       const client = progressClients.get(id);
       if (client) {
-        client.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        client.write(`data: ${JSON.stringify({ error: true, message: error.message })}\n\n`);
+        client.end();
+        progressClients.delete(id);
       }
       
-      res.status(500).json({
-        success: false,
-        message: 'Download failed',
-        error: error.message
-      });
+      if (error.stderr && error.stderr.includes('confirm you\'re not a bot')) {
+        res.status(429).json({ 
+          error: 'YouTube has detected automated access. Please try again later.',
+          details: 'The service is temporarily being rate-limited by YouTube.' 
+        });
+      } else {
+        res.status(500).json({ 
+          error: 'Failed to download or convert audio',
+          details: error.message 
+        });
+      }
     }
 });
   

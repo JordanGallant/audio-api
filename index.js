@@ -276,7 +276,7 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
             '-q:a 0',        // Use highest quality
             '-ar 44100'      // Set sample rate
         ])
-        .audioBitrate(320) //converts to 320kbps
+         //converts to 320kbps
         .on('start', (commandLine) => {
             console.log('[FFMPEG START]', commandLine);
         })

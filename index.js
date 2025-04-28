@@ -270,13 +270,7 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
     const outputPath = `uploads/${Date.now()}_320kbps.mp3`;
 
     ffmpeg(inputPath)
-        .outputOptions([
-            '-b:a 320k',     // Set audio bitrate to 320k
-            '-c:a libmp3lame', // Use MP3 codec
-            '-q:a 0',        // Use highest quality
-            '-ar 44100'      // Set sample rate
-        ])
-         //converts to 320kbps
+        .audioBitrate(320) //converts to 320kbps
         .on('start', (commandLine) => {
             console.log('[FFMPEG START]', commandLine);
         })

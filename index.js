@@ -4,9 +4,14 @@ const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
 const cors = require('cors');
+const dotenv = require('dotenv');
 const axios = require('axios');
 const youtubedl = require('youtube-dl-exec');
 const { exec } = require('child_process');
+
+
+dotenv.config();
+api = process.env.YOUTUBE_API
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -32,27 +37,37 @@ app.post('/get-soundcloud-clientid', async (req, res) => {
         res.send(stdout.trim());
     });
 });
+let requestCounter = 0;
 // search endpoint to YouTube -> now returns videoId to client
 app.post('/search', async (req, res) => {
+    const query = req.body;
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${api}&maxResults=10`;
     try {
-        // get the query 
-        const query = req.body;
-        //error handling
-        if (!query || query.trim() === '') {
-            return res.status(400).json({ error: 'Missing or empty query' });
+        console.log("Sending request to YouTube API");
+        const response = await axios.get(url);
+
+        // checks video is not a music video -> unwanted/dead audio
+        let videoId;
+        for (const item of response.data.items) {
+            if (item.id.videoId && item.snippet.title) {
+                const currentTitle = item.snippet.title;
+                if (!currentTitle.toLowerCase().includes('video') && !currentTitle.toLowerCase().includes('show') && !currentTitle.toLowerCase().includes('stage') && !currentTitle.toLowerCase().includes('remix')) {
+                    videoId = item.id.videoId;
+                    console.log("vidoe", videoId)
+                    break;
+                }
+            }
         }
-        
-        // Calls the async scraper function
-        const videoId = await findYoutubeVideoId(query);
-        
-        if (videoId) {
-            return res.json({ videoId });
-        } else {
-            return res.status(404).json({ error: 'No suitable video found' });
-        }
+        requestCounter++;
+        console.log(`YouTube API request #${requestCounter} for query: ${query}`);
+
+        // return the video Id and title to the client
+        res.status(200).json({
+            videoId: videoId
+        });
     } catch (error) {
-        console.error('Error in search endpoint:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('❌ YouTube API error:', error.message);
+        res.status(500).json({ error: 'Failed to fetch YouTube results' });
     }
 });
 
@@ -311,54 +326,36 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
 
 //function to scrape yotuube to get video id -> bypass youtube qutoas
 async function findYoutubeVideoId(query) {
-    try {
-      // gets query from client
-      const searchQuery = query;
-      const searchUrl = `https://www.youtube.com/results?search_query=${searchQuery}`;
-      
-      // set headers to mimic user
-      const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
-      };
-      
-      // Get HTML of webpage with search results
-      const response = await axios.get(searchUrl, { headers });
-      const html = response.data;
-      
-      // Extract video IDs and titles using regex
-      const videoDataRegex = /"videoId":"([^"]+)".*?"title":\s*{.*?"runs":\s*\[\s*{"text":\s*"([^"]+)"/g;
-      const matches = Array.from(html.matchAll(videoDataRegex));
-      
-      // Filter results based on title keywords
-      const filterWords = ['video', 'show', 'stage', 'remix'];
-      
-      for (const match of matches) {
-        const videoId = match[1];
-        const title = match[2].toLowerCase();
-        
-        // Check if title contains any of the filter words
-        const containsFilterWord = filterWords.some(word => title.includes(word));
-        
-        if (!containsFilterWord) {
-          console.log("Found video:", videoId);
-          return videoId;
-        }
-      }
-      
-      // If all videos were filtered out, return the first video ID as fallback
-      if (matches.length > 0) {
-        console.log("All videos contained filtered words, returning first result as fallback");
-        return matches[0][1];
-      }
-      
-      console.log("No videos found");
-      return null;
-    } catch (error) {
-      console.error('Error fetching YouTube data:', error);
-      return null;
+  try {
+    // search query
+    const searchUrl = `https://www.youtube.com/results?search_query=${query}`;
+    
+    // headers -> mimic user
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9'
+    };
+    
+    //get html of webpage with search 
+    const response = await axios.get(searchUrl, { headers });
+    const html = response.data;
+    
+    // gets video ID using regex 
+    const videoIdRegex = /"videoId":"([^"]+)"/g;
+    const matches = html.matchAll(videoIdRegex);
+    
+    // first video, most relevant
+    for (const match of matches) {
+      return match[1]; // Return the first matched video ID
     }
+   
+    
+    return null;
+  } catch (error) {
+    console.error('Error fetching YouTube data:', error);
+    return null;
   }
+}
 
 
 

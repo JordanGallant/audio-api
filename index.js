@@ -4,7 +4,6 @@ const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const axios = require('axios');
 const youtubedl = require('youtube-dl-exec');
 const { exec } = require('child_process');
@@ -89,7 +88,6 @@ if (!fs.existsSync(downloadDir)) {
 app.post('/download', async (req, res) => {
     const { id: videoId } = req.body;
     const id = req.query.id; // Get the tracking ID from the query parameter 
-    console.log(id)
     const url = `https://www.youtube.com/watch?v=${videoId}`; //sets youtube url
     const outputPath = path.join(__dirname, 'downloads', `${videoId}.mp3`); //temp folder for downloading from youtube
     const convertedPath = path.join(__dirname, 'downloads', `${videoId}_320kbps.mp3`);

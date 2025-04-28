@@ -7,9 +7,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const axios = require('axios');
 const youtubedl = require('youtube-dl-exec');
-
-dotenv.config();
-api = process.env.YOUTUBE_API
+const { exec } = require('child_process');
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -20,35 +18,42 @@ app.use((req, res, next) => {
     console.log(`${req.method} ${req.url}`);
     next();
 });
-
-// search endpoint to YouTube -> now returns videoId to client
-app.post('/search', async (req, res) => {
-    const query = req.body;
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${api}&maxResults=10`;
-    try {
-        console.log("Sending request to YouTube API");
-        const response = await axios.get(url);
-
-        // checks video is not a music video -> unwanted/dead audio
-        let videoId;
-        for (const item of response.data.items) {
-            if (item.id.videoId && item.snippet.title) {
-                const currentTitle = item.snippet.title;
-                if (!currentTitle.toLowerCase().includes('official') && !currentTitle.toLowerCase().includes('show') && !currentTitle.toLowerCase().includes('stage')&& !currentTitle.toLowerCase().includes('remix')) {
-                    videoId = item.id.videoId;
-                    console.log("vidoe", videoId)
-                    break;
-                }
-            }
+// dynamically gets client ID -> ensures even when revoked it works
+app.post('/get-soundcloud-clientid', async (req, res) => {
+    exec('curl -s https://a-v2.sndcdn.com/assets/0-c78a5fdb.js | grep -o "client_id=[a-zA-Z0-9]*"', (error, stdout, stderr) => {
+        if (error) {
+            console.error(`Error executing command: ${error.message}`);
+            return res.status(500).send('Error fetching SoundCloud client ID');
+        }
+        if (stderr) {
+            console.error(`stderr: ${stderr}`);
+            return res.status(500).send('Error fetching SoundCloud client ID');
         }
 
-        // return the video Id and title to the client
-        res.status(200).json({
-            videoId: videoId
-        });
+        res.send(stdout.trim());
+    });
+});
+// search endpoint to YouTube -> now returns videoId to client
+app.post('/search', async (req, res) => {
+    try {
+        // get the query 
+        const query = req.body;
+        //error handling
+        if (!query || query.trim() === '') {
+            return res.status(400).json({ error: 'Missing or empty query' });
+        }
+        
+        // Calls the async scraper function
+        const videoId = await findYoutubeVideoId(query);
+        
+        if (videoId) {
+            return res.json({ videoId });
+        } else {
+            return res.status(404).json({ error: 'No suitable video found' });
+        }
     } catch (error) {
-        console.error('❌ YouTube API error:', error.message);
-        res.status(500).json({ error: 'Failed to fetch YouTube results' });
+        console.error('Error in search endpoint:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
@@ -77,167 +82,168 @@ app.get('/progress', (req, res) => {
 
 const downloadDir = path.join(__dirname, 'downloads');
 if (!fs.existsSync(downloadDir)) {
-  fs.mkdirSync(downloadDir);
+    fs.mkdirSync(downloadDir);
 }
 
 //receives video id -> download the audio from youtube 
 app.post('/download', async (req, res) => {
     const { id: videoId } = req.body;
     const id = req.query.id; // Get the tracking ID from the query parameter 
+    console.log(id)
     const url = `https://www.youtube.com/watch?v=${videoId}`; //sets youtube url
     const outputPath = path.join(__dirname, 'downloads', `${videoId}.mp3`); //temp folder for downloading from youtube
     const convertedPath = path.join(__dirname, 'downloads', `${videoId}_320kbps.mp3`);
     const cookiesPath = path.join(__dirname, 'cookies.txt'); //finds spoofed auth cookies
-    
+
     try {
-      // check if cookies file exists
-      if (!fs.existsSync(cookiesPath)) {
-        console.log('Creating cookies file from browser...');
-        try {
-            //loads cookies to bypass auth
-          await youtubedl('https://www.youtube.com/', {
-            dumpSingleJson: true,
-            skipDownload: true,
-            cookiesFromBrowser: 'chrome',
-            cookies: cookiesPath
-          });
-        } catch (cookieError) {
-          console.log('Cookie extraction warning:', cookieError.message);
-        }
-      }
-      
-      // Send initial progress update
-      const client = progressClients.get(id);
-      if (client) {
-          client.write(`data: ${JSON.stringify({ percent: "0.00" })}\n\n`);
-      }
-      
-      // download audio from YouTube
-      await youtubedl(url, {
-        extractAudio: true,
-        audioFormat: 'mp3',
-        output: outputPath,
-        noCheckCertificates: true,
-        noWarnings: true,
-        preferFreeFormats: true,
-        youtubeSkipDashManifest: true,
-        cookies: cookiesPath,
-        geoBypass: true,
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        addHeader: [
-          'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language:en-US,en;q=0.5',
-          'DNT:1',
-          'Connection:keep-alive'
-        ],
-        retries: 3,
-        socketTimeout: 30,
-        forceOverwrite: true
-      });
-      //server log when download is done
-      console.log(`[YOUTUBE-DL END] Successfully downloaded video ${videoId} to ${outputPath}`);
-
-
-      // send progress update after download
-      if (client) {
-          client.write(`data: ${JSON.stringify({ percent: "50.00" })}\n\n`); //50 when done
-      }
-
-      // convert bitrate to 320kbps using fluent-ffmpeg
-      await new Promise((resolve, reject) => {
-        ffmpeg(outputPath)
-          .audioBitrate(320)
-          .format('mp3')
-          .on('progress', (progress) => {
-              // calculate total progress (50% for download + 50% for conversion)
-              const totalProgress = 50 + (progress.percent || 0) * 0.5;
-              
-              // send progress update
-              const client = progressClients.get(id);
-              if (client) {
-                  client.write(`data: ${JSON.stringify({
-                      percent: totalProgress.toFixed(2)
-                  })}\n\n`);
-              }
-          })
-          .on('error', (err) => {
-            console.error('FFmpeg error:', err);
-            reject(err);
-          })
-          //server logging when coversion done
-          .on('end', () => {
-            console.log('Bitrate conversion completed');
-            
-            // Send final progress update
-            const client = progressClients.get(id);
-            if (client) {
-                client.write(`data: ${JSON.stringify({ percent: "100.00", done: true })}\n\n`);
+        // check if cookies file exists
+        if (!fs.existsSync(cookiesPath)) {
+            console.log('Creating cookies file from browser...');
+            try {
+                //loads cookies to bypass auth
+                await youtubedl('https://www.youtube.com/', {
+                    dumpSingleJson: true,
+                    skipDownload: true,
+                    cookiesFromBrowser: 'chrome',
+                    cookies: cookiesPath
+                });
+            } catch (cookieError) {
+                console.log('Cookie extraction warning:', cookieError.message);
             }
-            
-            resolve();
-          })
-          .save(convertedPath);
-      });
-  
-      // Set headers for streaming the file
-      res.setHeader('Content-Disposition', `attachment; filename="${videoId}_320kbps.mp3"`);
-      res.setHeader('Content-Type', 'audio/mpeg');
-  
-      // Create a read stream and pipe it to the response
-      const fileStream = fs.createReadStream(convertedPath);
-      fileStream.pipe(res);
-  
-      // Delete the files after sending
-      fileStream.on('end', () => {
-        // Delete both original and converted files
-        fs.unlink(outputPath, (err) => {
-          if (err) console.error('Error deleting original file:', err);
-        });
-        fs.unlink(convertedPath, (err) => {
-          if (err) console.error('Error deleting converted file:', err);
-        });
-        
-        // Close the progress stream
+        }
+
+        // Send initial progress update
         const client = progressClients.get(id);
         if (client) {
-          client.end();
-          progressClients.delete(id);
+            client.write(`data: ${JSON.stringify({ percent: "0.00" })}\n\n`);
         }
-      });
+
+        // download audio from YouTube
+        await youtubedl(url, {
+            extractAudio: true,
+            audioFormat: 'mp3',
+            output: outputPath,
+            noCheckCertificates: true,
+            noWarnings: true,
+            preferFreeFormats: true,
+            youtubeSkipDashManifest: true,
+            cookies: cookiesPath,
+            geoBypass: true,
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            addHeader: [
+                'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language:en-US,en;q=0.5',
+                'DNT:1',
+                'Connection:keep-alive'
+            ],
+            retries: 3,
+            socketTimeout: 30
+
+        });
+        //server log when download is done
+        console.log(`[YOUTUBE-DL END] Successfully downloaded video ${videoId} to ${outputPath}`);
+
+
+        // send progress update after download
+        if (client) {
+            client.write(`data: ${JSON.stringify({ percent: "50.00" })}\n\n`); //50 when done
+        }
+
+        // convert bitrate to 320kbps using fluent-ffmpeg
+        await new Promise((resolve, reject) => {
+            ffmpeg(outputPath)
+                .audioBitrate(320)
+                .format('mp3')
+                .on('progress', (progress) => {
+                    // calculate total progress (50% for download + 50% for conversion)
+                    const totalProgress = 50 + (progress.percent || 0) * 0.5;
+
+                    // send progress update
+                    const client = progressClients.get(id);
+                    if (client) {
+                        client.write(`data: ${JSON.stringify({
+                            percent: totalProgress.toFixed(2)
+                        })}\n\n`);
+                    }
+                })
+                .on('error', (err) => {
+                    console.error('FFmpeg error:', err);
+                    reject(err);
+                })
+                //server logging when coversion done
+                .on('end', () => {
+                    console.log('Bitrate conversion completed');
+
+                    // Send final progress update
+                    const client = progressClients.get(id);
+                    if (client) {
+                        client.write(`data: ${JSON.stringify({ percent: "100.00", done: true })}\n\n`);
+                    }
+
+                    resolve();
+                })
+                .save(convertedPath);
+        });
+
+        // Set headers for streaming the file
+        res.setHeader('Content-Disposition', `attachment; filename="${videoId}_320kbps.mp3"`);
+        res.setHeader('Content-Type', 'audio/mpeg');
+
+        // Create a read stream and pipe it to the response
+        const fileStream = fs.createReadStream(convertedPath);
+        fileStream.pipe(res);
+
+        // Delete the files after sending
+        fileStream.on('end', () => {
+            // Delete both original and converted files
+            fs.unlink(outputPath, (err) => {
+                if (err) console.error('Error deleting original file:', err);
+            });
+            fs.unlink(convertedPath, (err) => {
+                if (err) console.error('Error deleting converted file:', err);
+            });
+
+            // Close the progress stream
+            const client = progressClients.get(id);
+            if (client) {
+                client.end();
+                progressClients.delete(id);
+            }
+        });
     } catch (error) {
-      console.error('Download error:', error);
-      
-      // Clean up any files that might have been created
-      [outputPath, convertedPath].forEach(filePath => {
-        if (fs.existsSync(filePath)) {
-          fs.unlink(filePath, err => {
-            if (err) console.error(`Error cleaning up ${filePath}:`, err);
-          });
+        console.error('Download error:', error);
+
+        // Clean up any files that might have been created
+        [outputPath, convertedPath].forEach(filePath => {
+            if (fs.existsSync(filePath)) {
+                fs.unlink(filePath, err => {
+                    if (err) console.error(`Error cleaning up ${filePath}:`, err);
+                });
+            }
+        });
+
+        // Send error to progress client
+        const client = progressClients.get(id);
+        if (client) {
+            client.write(`data: ${JSON.stringify({ error: true, message: error.message })}\n\n`);
+            client.end();
+            progressClients.delete(id);
         }
-      });
-      
-      // Send error to progress client
-      const client = progressClients.get(id);
-      if (client) {
-        client.write(`data: ${JSON.stringify({ error: true, message: error.message })}\n\n`);
-        client.end();
-        progressClients.delete(id);
-      }
-      
-      if (error.stderr && error.stderr.includes('confirm you\'re not a bot')) {
-        res.status(429).json({ 
-          error: 'YouTube has detected automated access. Please try again later.',
-          details: 'The service is temporarily being rate-limited by YouTube.' 
-        });
-      } else {
-        res.status(500).json({ 
-          error: 'Failed to download or convert audio',
-          details: error.message 
-        });
-      }
+
+        if (error.stderr && error.stderr.includes('confirm you\'re not a bot')) {
+            res.status(429).json({
+                error: 'YouTube has detected automated access. Please try again later.',
+                details: 'The service is temporarily being rate-limited by YouTube.'
+            });
+        } else {
+            res.status(500).json({
+                error: 'Failed to download or convert audio',
+                details: error.message
+            });
+        }
     }
 });
-  
+
 // audio conversion endpoint - recieves audio data
 app.post('/convert-audio', upload.single('audio'), (req, res) => {
     const id = req.query.id;
@@ -305,6 +311,56 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
         .save(outputPath);
 });
 
+//function to scrape yotuube to get video id -> bypass youtube qutoas
+async function findYoutubeVideoId(query) {
+    try {
+      // gets query from client
+      const searchQuery = query;
+      const searchUrl = `https://www.youtube.com/results?search_query=${searchQuery}`;
+      
+      // set headers to mimic user
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+      };
+      
+      // Get HTML of webpage with search results
+      const response = await axios.get(searchUrl, { headers });
+      const html = response.data;
+      
+      // Extract video IDs and titles using regex
+      const videoDataRegex = /"videoId":"([^"]+)".*?"title":\s*{.*?"runs":\s*\[\s*{"text":\s*"([^"]+)"/g;
+      const matches = Array.from(html.matchAll(videoDataRegex));
+      
+      // Filter results based on title keywords
+      const filterWords = ['video', 'show', 'stage', 'remix'];
+      
+      for (const match of matches) {
+        const videoId = match[1];
+        const title = match[2].toLowerCase();
+        
+        // Check if title contains any of the filter words
+        const containsFilterWord = filterWords.some(word => title.includes(word));
+        
+        if (!containsFilterWord) {
+          console.log("Found video:", videoId);
+          return videoId;
+        }
+      }
+      
+      // If all videos were filtered out, return the first video ID as fallback
+      if (matches.length > 0) {
+        console.log("All videos contained filtered words, returning first result as fallback");
+        return matches[0][1];
+      }
+      
+      console.log("No videos found");
+      return null;
+    } catch (error) {
+      console.error('Error fetching YouTube data:', error);
+      return null;
+    }
+  }
 
 
 

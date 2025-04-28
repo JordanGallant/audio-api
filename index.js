@@ -2,12 +2,15 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
+const { exec } = require('child_process');
 const fs = require('fs');
+const util = require('util');
+const execPromise = util.promisify(exec);
 const cors = require('cors');
 const dotenv = require('dotenv');
 const axios = require('axios');
 const youtubedl = require('youtube-dl-exec');
-const { exec } = require('child_process');
+
 
 
 dotenv.config();
@@ -40,37 +43,44 @@ app.post('/get-soundcloud-clientid', async (req, res) => {
 let requestCounter = 0;
 // search endpoint to YouTube -> now returns videoId to client
 app.post('/search', async (req, res) => {
-    const query = req.body;
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${api}&maxResults=10`;
+    const query = req.body; // Assuming query is sent as { query: "search term" }
+    
     try {
-        console.log("Sending request to YouTube API");
-        const response = await axios.get(url);
-
-        // checks video is not a music video -> unwanted/dead audio
-        let videoId;
-        for (const item of response.data.items) {
-            if (item.id.videoId && item.snippet.title) {
-                const currentTitle = item.snippet.title;
-                if (!currentTitle.toLowerCase().includes('video') && !currentTitle.toLowerCase().includes('show') && !currentTitle.toLowerCase().includes('stage') && !currentTitle.toLowerCase().includes('remix')) {
-                    videoId = item.id.videoId;
-                    console.log("vidoe", videoId)
-                    break;
-                }
-            }
+        console.log("Executing YouTube search via curl for query:", query);
+        
+        // Execute the curl command
+        const curlCommand = `curl -s "https://www.youtube.com/results?search_query=${query}" \\
+          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" \\
+          -H "Accept-Language: en-US,en;q=0.9" | \\
+          grep -o '"videoId":"[^"]*"' | \\
+          head -1 | \\
+          cut -d'"' -f4`;
+        
+        const { stdout, stderr } = await execPromise(curlCommand);
+        
+        if (stderr) {
+            console.error('❌ Curl command error:', stderr);
+            return res.status(500).json({ error: 'Failed to execute search' });
         }
-        requestCounter++;
-        console.log(`YouTube API request #${requestCounter} for query: ${query}`);
-
-        // return the video Id and title to the client
+        
+        const videoId = stdout.trim();
+        
+        if (!videoId) {
+            return res.status(404).json({ error: 'No video found' });
+        }
+        
+        console.log("Found video ID:", videoId);
+        
+        // Return the video ID to the client
         res.status(200).json({
             videoId: videoId
         });
+        
     } catch (error) {
-        console.error('❌ YouTube API error:', error.message);
+        console.error('❌ Search error:', error.message);
         res.status(500).json({ error: 'Failed to fetch YouTube results' });
     }
 });
-
 
 const upload = multer({ dest: 'uploads/' });
 const progressClients = new Map(); // key: id, value: response
@@ -323,41 +333,6 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
         })
         .save(outputPath);
 });
-
-//function to scrape yotuube to get video id -> bypass youtube qutoas
-async function findYoutubeVideoId(query) {
-  try {
-    // search query
-    const searchUrl = `https://www.youtube.com/results?search_query=${query}`;
-    
-    // headers -> mimic user
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9'
-    };
-    
-    //get html of webpage with search 
-    const response = await axios.get(searchUrl, { headers });
-    const html = response.data;
-    
-    // gets video ID using regex 
-    const videoIdRegex = /"videoId":"([^"]+)"/g;
-    const matches = html.matchAll(videoIdRegex);
-    
-    // first video, most relevant
-    for (const match of matches) {
-      return match[1]; // Return the first matched video ID
-    }
-   
-    
-    return null;
-  } catch (error) {
-    console.error('Error fetching YouTube data:', error);
-    return null;
-  }
-}
-
-
 
 // starts server
 app.listen(3000, () => {

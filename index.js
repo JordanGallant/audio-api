@@ -270,6 +270,12 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
     const outputPath = `uploads/${Date.now()}_320kbps.mp3`;
 
     ffmpeg(inputPath)
+        .outputOptions([
+            '-b:a 320k',     // Set audio bitrate to 320k
+            '-c:a libmp3lame', // Use MP3 codec
+            '-q:a 0',        // Use highest quality
+            '-ar 44100'      // Set sample rate
+        ])
         .audioBitrate(320) //converts to 320kbps
         .on('start', (commandLine) => {
             console.log('[FFMPEG START]', commandLine);
@@ -323,41 +329,6 @@ app.post('/convert-audio', upload.single('audio'), (req, res) => {
         })
         .save(outputPath);
 });
-
-//function to scrape yotuube to get video id -> bypass youtube qutoas
-async function findYoutubeVideoId(query) {
-  try {
-    // search query
-    const searchUrl = `https://www.youtube.com/results?search_query=${searchQuery}`;
-    
-    // headers -> mimic user
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9'
-    };
-    
-    //get html of webpage with search 
-    const response = await axios.get(searchUrl, { headers });
-    const html = response.data;
-    
-    // gets video ID using regex 
-    const videoIdRegex = /"videoId":"([^"]+)"/g;
-    const matches = html.matchAll(videoIdRegex);
-    
-    // first video, most relevant
-    for (const match of matches) {
-      return match[1]; // Return the first matched video ID
-    }
-   
-    
-    return null;
-  } catch (error) {
-    console.error('Error fetching YouTube data:', error);
-    return null;
-  }
-}
-
-
 
 // starts server
 app.listen(3000, () => {
